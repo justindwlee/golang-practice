@@ -1,7 +1,5 @@
 package main
 
-import "fmt"
+func main(){
 
-func main() {
-    fmt.Println("Hello from my Go practice project!")
 }
