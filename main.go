@@ -1,31 +1,49 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	mydict "test/mydict"
+	"net/http"
 )
 
+type requestResult struct {
+	url string
+	status string
+}
+
+var errRequestFailed = errors.New("request failed")
+
 func main() {
-	dictionary := mydict.Dictionary{}
-	dictionary["firstItem"] = "hahaha"
-	def, err := dictionary.Search("firstItem")
-	if err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println(def)
+	c := make(chan requestResult)
+	results := make(map[string]string)
+	urls := []string{
+		"https://www.airbnb.com/",
+		"https://www.naver.com/",
+		"https://www.amazon.com/",
+		"https://www.reddit.com/",
+		"https://www.google.com/",
+		"https://soundcloud.com/",
+		"https://www.facebook.com/",
+		"https://www.instagram.com/",
+		"https://academy.nomadcoders.co/",
 	}
-	addErr := dictionary.Add("secondItem", "what the heck")
-	if addErr != nil{
-		fmt.Println(addErr)
-	} else {
-		fmt.Println(dictionary)
+	for _, url := range urls {
+		go hitURL(url, c)
 	}
-	updateErr := dictionary.Update("secondItem", "new DEFITION!")
-	if updateErr != nil{
-		fmt.Println(updateErr)
-	} else {
-		fmt.Println(dictionary)
+	for i:=0; i<len(urls); i++ {
+		result := <-c
+		results[result.url] = result.status
 	}
-	dictionary.Delete("secondItem")
-	fmt.Println(dictionary)
+	for url, status := range results {
+		fmt.Println(url, status)
+	}
+}
+
+func hitURL(url string, c chan<- requestResult) {
+	resp, err := http.Get(url)
+	status := "OK"
+	if err != nil || resp.StatusCode >= 400 {
+		status = "FAILED"
+	}
+	c <- requestResult{url:url, status: status}
 }
