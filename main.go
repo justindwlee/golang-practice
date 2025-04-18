@@ -1,15 +1,14 @@
 package main
 
 import (
-	"encoding/csv"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	ccsv "github.com/tsak/concurrent-csv-writer"
 )
 
 type extractedJob struct {
@@ -19,50 +18,31 @@ type extractedJob struct {
 	companyName string
 }
 
-var extractedJobs []extractedJob
 
 var baseURL string = "https://www.saramin.co.kr/zf_user/search/recruit?&searchword=python"
 
 func main() {
+	c := make(chan []extractedJob)
+	var totalJobs []extractedJob
 	totalPages := getPages()
 	for i := 1; i <= totalPages; i++{
 		fmt.Println("Extracting page ", i)
-		getPage(i)
+		go getPage(i, c)
 	}
-	for _, job := range extractedJobs {
-		fmt.Println(job)
+	for i :=0; i < totalPages; i++ {
+		extractedJobs := <- c
+		totalJobs = append(totalJobs, extractedJobs...)
 	}
-	writeJobs(extractedJobs)
-	fmt.Println("Done, extracted", len(extractedJobs))
+
+	writeJobs(totalJobs)
+	fmt.Println("Done, extracted", len(totalJobs), " jobs")
 }
 
-func writeJobs(jobs []extractedJob){
-	file, err := os.Create("jobs.csv")
-	checkErr(err)
-	utf8bom := []byte{0xEF, 0xBB, 0xBF}
-	file.Write(utf8bom)
 
-	w := csv.NewWriter(file)
-	defer w.Flush()
 
-	headers := []string {"Title", "Job Condition", "Job Sector", "Company"}
-	wErr := w.Write(headers)
-	checkErr(wErr)
-
-	for _, job := range jobs {
-		jobSlice := []string {}
-		jobSlice = append(jobSlice, job.title)
-		jobSlice = append(jobSlice, job.companyName)
-		jobConditionJoined := strings.Join(job.jobCondition, " ")
-		jobSlice = append(jobSlice, jobConditionJoined)
-		jobSectorJoined := strings.Join(job.jobSector, " ")
-		jobSlice = append(jobSlice, jobSectorJoined)
-		wErr := w.Write(jobSlice)
-		checkErr(wErr)
-	}
-}
-
-func getPage(page int){
+func getPage(page int, mainC chan<- []extractedJob) {
+	var jobs []extractedJob
+	c := make(chan extractedJob)
 	pageURL := baseURL + "&recruitPage="+ strconv.Itoa(page)
 	res, err := http.Get(pageURL)
 	checkErr(err)
@@ -75,12 +55,16 @@ func getPage(page int){
 	jobAreas := doc.Find(".item_recruit")
 
 	jobAreas.Each(func(i int, s *goquery.Selection){
-		job := extractJob(s)
-		extractedJobs = append(extractedJobs, job)
+		go extractJob(s, c)
 	})
+	for i:=0; i<jobAreas.Length(); i++ {
+		job := <-c
+		jobs = append(jobs, job)
+	}
+	mainC <- jobs
 }
 
-func extractJob(s *goquery.Selection) extractedJob {
+func extractJob(s *goquery.Selection, c chan<- extractedJob){
 	jobTitle := s.Find(".area_job > .job_tit > a").AttrOr("title", "")
 
 	var jobCondition []string
@@ -110,7 +94,7 @@ func extractJob(s *goquery.Selection) extractedJob {
 		jobSector: jobSector,
 		companyName: companyName,
 	}
-	return job
+	c<-job
 }
 
 func getPages() int {
@@ -128,6 +112,50 @@ func getPages() int {
 	})
 
 	return pages
+}
+
+func writeJobs(jobs []extractedJob){
+	ccsvWriter, err := ccsv.NewCsvWriter("jobs.csv")
+	checkErr(err)
+	defer ccsvWriter.Close()
+
+	// file, err := os.Create("jobs.csv")
+	// checkErr(err)
+	// utf8bom := []byte{0xEF, 0xBB, 0xBF}
+	// file.Write(utf8bom)
+
+	// w, err := ccsv.NewCsvWriter(file)
+	// defer w.Flush()
+
+	headers := []string {"Title", "Job Condition", "Job Sector", "Company"}
+	wErr := ccsvWriter.Write(headers)
+	checkErr(wErr)
+
+	done := make(chan bool)
+
+	for _, job := range jobs {
+		go func(job extractedJob){
+			jobSlice := extractJobSlice(job)
+			wErr := ccsvWriter.Write(jobSlice)
+			checkErr(wErr)
+			done <- true
+		}(job)
+	}
+	
+	for i:=0; i < len(jobs); i++ {
+		<-done
+	}
+}
+
+func extractJobSlice(job extractedJob) []string{
+	jobSlice := []string {}
+	jobSlice = append(jobSlice, job.title)
+	jobSlice = append(jobSlice, job.companyName)
+	jobConditionJoined := strings.Join(job.jobCondition, " ")
+	jobSlice = append(jobSlice, jobConditionJoined)
+	jobSectorJoined := strings.Join(job.jobSector, " ")
+	jobSlice = append(jobSlice, jobSectorJoined)
+	return jobSlice
 }
 
 func checkErr(err error) {
